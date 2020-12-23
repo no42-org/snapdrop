@@ -1,4 +1,18 @@
+var process = require('process')
+// Handle SIGINT
+process.on('SIGINT', () => {
+  console.info("SIGINT Received, exiting...")
+  process.exit(0)
+})
+
+// Handle SIGTERM
+process.on('SIGTERM', () => {
+  console.info("SIGTERM Received, exiting...")
+  process.exit(0)
+})
+
 const parser = require('ua-parser-js');
+const { uniqueNamesGenerator, animals, colors } = require('unique-names-generator');
 
 class SnapdropServer {
 
@@ -17,12 +31,21 @@ class SnapdropServer {
         this._joinRoom(peer);
         peer.socket.on('message', message => this._onMessage(peer, message));
         this._keepAlive(peer);
+
+        // send displayName
+        this._send(peer, {
+            type: 'display-name',
+            message: {
+                displayName: peer.name.displayName,
+                deviceName: peer.name.deviceName
+            }
+        });
     }
 
     _onHeaders(headers, response) {
         if (response.headers.cookie && response.headers.cookie.indexOf('peerid=') > -1) return;
         response.peerId = Peer.uuid();
-        headers.push('Set-Cookie: peerid=' + response.peerId);
+        headers.push('Set-Cookie: peerid=' + response.peerId + "; SameSite=Strict; Secure");
     }
 
     _onMessage(sender, message) {
@@ -32,7 +55,7 @@ class SnapdropServer {
         } catch (e) {
             return; // TODO: handle malformed JSON
         }
-        
+
         switch (message.type) {
             case 'disconnect':
                 this._leaveRoom(sender);
@@ -113,7 +136,7 @@ class SnapdropServer {
 
     _keepAlive(peer) {
         this._cancelKeepAlive(peer);
-        var timeout = 10000;
+        var timeout = 30000;
         if (!peer.lastBeat) {
             peer.lastBeat = Date.now();
         }
@@ -182,12 +205,31 @@ class Peer {
     }
 
     _setName(req) {
-        var ua = parser(req.headers['user-agent']);
+        let ua = parser(req.headers['user-agent']);
+
+
+        let deviceName = ua.os.name.replace('Mac OS', 'Mac') + ' ';
+        if (ua.device.model) {
+            deviceName += ua.device.model;
+        } else {
+            deviceName += ua.browser.name;
+        }
+
+        const displayName = uniqueNamesGenerator({
+            length: 2,
+            separator: ' ',
+            dictionaries: [colors, animals],
+            style: 'capital',
+            seed: this.id.hashCode()
+        })
+
         this.name = {
             model: ua.device.model,
             os: ua.os.name,
             browser: ua.browser.name,
-            type: ua.device.type
+            type: ua.device.type,
+            deviceName,
+            displayName
         };
     }
 
@@ -225,5 +267,17 @@ class Peer {
         return uuid;
     };
 }
+
+Object.defineProperty(String.prototype, 'hashCode', {
+  value: function() {
+    var hash = 0, i, chr;
+    for (i = 0; i < this.length; i++) {
+      chr   = this.charCodeAt(i);
+      hash  = ((hash << 5) - hash) + chr;
+      hash |= 0; // Convert to 32bit integer
+    }
+    return hash;
+  }
+});
 
 const server = new SnapdropServer(process.env.PORT || 3000);
